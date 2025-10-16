@@ -1,48 +1,40 @@
-# /api/emotion.py
+# /api/emotion.py (NEW Custom Tool Version)
 
 import os
 import requests
-import time
 from http.server import BaseHTTPRequestHandler
 import json
 
-# We will get these from Vercel's "Environment Variables"
 ASSEMBLYAI_API_KEY = os.environ.get('ASSEMBLYAI_API_KEY')
-ULTRAVOX_API_KEY = os.environ.get('ULTRAVOX_API_KEY')
+# We don't need the Ultravox key anymore, as we are responding directly to the tool call.
 
 class handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
-        # 1. Read the data sent from Ultravox
+        # 1. Read the text sent from the Ultravox Custom Tool
         content_length = int(self.headers['Content-Length'])
         body = json.loads(self.rfile.read(content_length))
+        
+        user_text = body.get('text') # Expecting a JSON with a "text" field
 
-        audio_url = body.get('audio_url')
-        conversation_id = body.get('conversation_id')
-
-        if not audio_url or not conversation_id:
+        if not user_text:
             self.send_response(400)
             self.end_headers()
-            self.wfile.write(b'Missing data from Ultravox')
+            self.wfile.write(b'Missing "text" field in the request')
             return
 
         try:
-            # 2. Send audio to AssemblyAI and get the result
-            transcript_id = submit_audio_for_analysis(audio_url)
-            result = get_analysis_result(transcript_id)
+            # 2. Send the text to AssemblyAI's sentiment analysis
+            sentiment = get_sentiment_from_text(user_text)
 
-            # 3. Find the overall emotion (sentiment)
-            sentiment = "NEUTRAL"
-            if result.get('sentiment_analysis_results'):
-                sentiment = result['sentiment_analysis_results'][0]['sentiment']
-
-            # 4. Send the result back to Ultravox
-            update_ultravox_context(conversation_id, sentiment)
-
-            # 5. Send a success response
+            # 3. Send the result DIRECTLY back to the Ultravox tool
             self.send_response(200)
+            self.send_header('Content-type', 'application/json')
             self.end_headers()
-            self.wfile.write(json.dumps({'status': 'success', 'detected_emotion': sentiment}).encode())
+            
+            # This is the response Ultravox will receive and use
+            response_payload = {'detected_emotion': sentiment} 
+            self.wfile.write(json.dumps(response_payload).encode())
 
         except Exception as e:
             self.send_response(500)
@@ -50,29 +42,20 @@ class handler(BaseHTTPRequestHandler):
             self.wfile.write(str(e).encode())
         return
 
-# --- Helper Functions (these are the same as before) ---
-
-def submit_audio_for_analysis(audio_url):
+def get_sentiment_from_text(text_to_analyze):
+    """Submits text directly to AssemblyAI for sentiment analysis."""
     endpoint = "https://api.assemblyai.com/v2/transcript"
     headers = {'authorization': ASSEMBLYAI_API_KEY}
-    payload = {"audio_url": audio_url, "sentiment_analysis": True}
+    
+    # We create a "mock" transcript with the text we already have
+    payload = {
+        "text": text_to_analyze,
+        "sentiment_analysis": True
+    }
     response = requests.post(endpoint, json=payload, headers=headers)
-    return response.json()['id']
-
-def get_analysis_result(transcript_id):
-    endpoint = f"https://api.assemblyai.com/v2/transcript/{transcript_id}"
-    headers = {'authorization': ASSEMBLYAI_API_KEY}
-    while True:
-        response = requests.get(endpoint, headers=headers)
-        result = response.json()
-        if result['status'] == 'completed':
-            return result
-        elif result['status'] == 'error':
-            raise Exception("AssemblyAI analysis failed")
-        time.sleep(2)
-
-def update_ultravox_context(conversation_id, emotion):
-    url = f"https://api.ultravox.ai/v1/conversations/{conversation_id}/context"
-    headers = {'Authorization': f'Bearer {ULTRAVOX_API_KEY}', 'Content-Type': 'application/json'}
-    payload = {"variables": {"customer_emotion": emotion.lower()}}
-    requests.patch(url, json=payload, headers=headers)
+    result = response.json()
+    
+    # The result is immediate since we provided the text directly
+    if result.get('sentiment_analysis_results'):
+        return result['sentiment_analysis_results'][0]['sentiment']
+    return "NEUTRAL"
