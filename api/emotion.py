@@ -1,72 +1,39 @@
-# /api/emotion.py (NEW DEBUGGING Version)
+# api/emotion.py
 
 import os
 import requests
 import time
-from http.server import BaseHTTPRequestHandler
 import json
 
 ASSEMBLYAI_API_KEY = os.environ.get('ASSEMBLYAI_API_KEY')
 
-class handler(BaseHTTPRequestHandler):
+def handler(request):
+    try:
+        body = request.json()
+        audio_url = body.get('audio_url')
 
-    def do_POST(self):
-        # BREADCRUMB 1: Check if the function starts
-        print("[DEBUG] Function execution started.")
+        if not audio_url:
+            return {"statusCode": 400, "body": "Missing 'audio_url' from request"}
 
-        try:
-            content_length = int(self.headers['Content-Length'])
-            body = json.loads(self.rfile.read(content_length))
+        if not ASSEMBLYAI_API_KEY:
+            return {"statusCode": 500, "body": "AssemblyAI API key not set"}
 
-            # BREADCRUMB 2: Check what data we received from Ultravox
-            print(f"[DEBUG] Received data from Ultravox: {json.dumps(body)}")
+        transcript_id = submit_audio_for_analysis(audio_url)
+        result = get_analysis_result(transcript_id)
 
-            audio_url = body.get('audio_url')
+        sentiment = "NEUTRAL"
+        if result.get('sentiment_analysis_results'):
+            sentiment = result['sentiment_analysis_results'][0]['sentiment']
 
-            if not audio_url:
-                print("[ERROR] 'audio_url' was not found in the received data!")
-                self.send_response(400)
-                self.end_headers()
-                self.wfile.write(b'Missing "audio_url" from Ultravox tool')
-                return
+        return {
+            "statusCode": 200,
+            "body": json.dumps({"detected_emotion": sentiment})
+        }
 
-            # BREADCRUMB 3: Confirm we found the audio URL
-            print(f"[DEBUG] Found audio_url: {audio_url}")
+    except Exception as e:
+        return {"statusCode": 500, "body": f"Server Error: {str(e)}"}
 
-            # BREADCRUMB 4: Check if the API key is loaded
-            if not ASSEMBLYAI_API_KEY:
-                print("[FATAL ERROR] ASSEMBLYAI_API_KEY is missing from environment variables!")
-                raise Exception("Server configuration error: AssemblyAI API key not set.")
-
-            print("[DEBUG] AssemblyAI API Key is present. Submitting for analysis...")
-
-            transcript_id = submit_audio_for_analysis(audio_url)
-            print(f"[DEBUG] Submitted to AssemblyAI. Transcript ID: {transcript_id}")
-
-            result = get_analysis_result(transcript_id)
-            print("[DEBUG] Analysis complete from AssemblyAI.")
-
-            sentiment = "NEUTRAL"
-            if result.get('sentiment_analysis_results'):
-                sentiment = result['sentiment_analysis_results'][0]['sentiment']
-            print(f"[DEBUG] Detected sentiment: {sentiment}")
-
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            response_payload = {'detected_emotion': sentiment}
-            self.wfile.write(json.dumps(response_payload).encode())
-            print("[DEBUG] Successfully sent response back to Ultravox.")
-
-        except Exception as e:
-            # BREADCRUMB 5: This will print the EXACT error if the code crashes!
-            print(f"[FATAL CRASH] An exception occurred: {e}")
-            self.send_response(500)
-            self.end_headers()
-            self.wfile.write(str(e).encode())
-        return
-
-# --- Helper Functions (unchanged) ---
+# --- Helper Functions ---
 def submit_audio_for_analysis(audio_url):
     endpoint = "https://api.assemblyai.com/v2/transcript"
     headers = {'authorization': ASSEMBLYAI_API_KEY}
